@@ -1,0 +1,50 @@
+name: Update formula
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published app version, e.g. 0.3.0 (without v)
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: update-formula
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Validate requested version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: python -c 'import os,re; assert re.fullmatch(r"\d+\.\d+\.\d+",os.environ["VERSION"])'
+      - name: Download published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          test "$(gh release view "v$VERSION" --repo chiesennegs/delta-wifi --json isDraft --jq .isDraft)" = false
+          gh release download "v$VERSION" --repo chiesennegs/delta-wifi --dir "$RUNNER_TEMP/release" --pattern 'delta-wifi.rb' --pattern '*-macos-universal.tar.gz' --pattern '*.sha256'
+      - name: Verify and install recipe
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python .github/scripts/verify_release.py "$RUNNER_TEMP/release" "$VERSION"
+          ruby -c "$RUNNER_TEMP/release/delta-wifi.rb"
+          mkdir -p Formula
+          cp "$RUNNER_TEMP/release/delta-wifi.rb" Formula/delta-wifi.rb
+      - name: Commit recipe update
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Formula/delta-wifi.rb
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Update delta-wifi to $VERSION"
+          git push
